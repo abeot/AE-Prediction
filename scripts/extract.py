@@ -1,5 +1,5 @@
 """
-Last edited: 2025-04-21
+Last edited: 2025-05-04
 Author: Albert Cao
 Description: Extracting the adverse effects from drug labels of FDA approved drugs.
 The drug labels are downloaded from https://open.fda.gov/apis/drug/label/download/.
@@ -21,16 +21,22 @@ The drug labels are in JSON format and contain a field called 'adverse_reactions
 The 'adverse_reactions_table' field contains an HTML table with the adverse effects.
 
 Your task is to extract the adverse effects from the HTML table and return them in a structured format.
-The structured format should be a dictionary with (key, value) pairs, where the key
-is the name of the adverse effect and the value is the percentage of patients that experienced that adverse effect.
-The percentage should be a float between 0 and 100.
+The structured format should be a dictionary, that 
+includes the following:
+- 'drug_route': the route of administration of the drug (e.g. 'oral', 'intravenous', etc.)
+- 'drug_name': the name of the drug
+- 'adverse_effects': which is a list of dictionaries, where each dictionary represents a row in the table, and should have the following:
+    - 'adverse_effect': the name of the adverse effect, all lowercase, standardized to the MedDRA dictionary for adverse effects
+    - 'percentage': the percentage of patients that experienced that adverse effect
+    - 'grade_34': the percentage of patients that experienced that adverse effect with grade 3 or 4
+    - 'placebo': the percentage of patients that experienced that adverse effect in the placebo group
+    - 'grade_34_placebo': the percentage of patients that experienced that adverse effect with grade 3 or 4 in the placebo group
+    If a value is not present in the table, you should set it to null. Do not attempt to guess the value (for example, if there is no grade 3 or 4 data, set it to null).
 
-The adverse effects may have different names in different drug labels, so you should make sure to
-normalize the names of the adverse effects.
 The percentage may be in different formats, such as '29 %', '<1 %', or '0.5 %'.
 You should also make sure to handle these different formats and convert them to a float between 0 and 100.
 
-You will receive an HTML table as a string.
+You will receive an HTML table as a string. You will also receive the adverse reactions label as a string.
 
 Make sure to ONLY return the structured data and nothing else.
 The structured data should be in a JSON format.
@@ -43,7 +49,19 @@ def parse_adverse_reactions_table_llm(html_string: str) -> dict:
     Args:
         html_string (str): String containing HTML table.
     Returns:
-        dict: { "adverse_effect_1": percentage_1, "adverse_effect_2": percentage_2, ... }
+        {
+            'drug_route': str,
+            'drug_name': str,
+            'adverse_effects': list of dictionaries: [
+                {
+                    'adverse_effect': str,
+                    'percentage': float,
+                    'grade_34': float,
+                    'placebo': float,
+                    'grade_34_placebo': float
+                }
+            ]
+        }
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -51,11 +69,12 @@ def parse_adverse_reactions_table_llm(html_string: str) -> dict:
             {"role": "user", "content": instructions},
             {"role": "user", "content": html_string}
         ],
-        max_tokens=500
+        # max_tokens=500
     )
     json_response = response.choices[0].message.content
     # strip the ```json and ``` from the start and end of the response
     json_response = json_response.strip().lstrip('```json').rstrip('```')
+    # print(f"json response: {json_response}")
     dict_response = json.loads(json_response)
     return dict_response
 
@@ -120,12 +139,12 @@ def parse_adverse_reactions_table(html_string: str) -> dict:
 
 
 # data_files = [f"data/drug-label-00{i}-of-0013.json" for i in range(1, 14)]
-data_files = ['data/drug-label-0013-of-0013.json']
+data_files = ['data/drug-label-0013-of-0013.json', 'data/drug-label-0012-of-0013.json']
 
-drug_info = {
-    "drug_name": [],
-    "adverse_effects": []
-}
+drug_info = []
+
+cnt = 0
+cnt_limit = 25
 
 for file in data_files:
     with open(file, 'r') as f:
@@ -133,7 +152,14 @@ for file in data_files:
     
     drug_labels = data['results']
 
+    if (cnt > cnt_limit):
+        print(f"Reached {cnt_limit} drug labels, stopping.")
+        break
+
     for drug_label in drug_labels:
+        if (cnt > cnt_limit):
+            print(f"Reached {cnt_limit} drug labels, stopping.")
+            break
         drug_name = None
         if 'openfda' in drug_label and 'generic_name' in drug_label['openfda']:
             drug_name = drug_label['openfda']['generic_name'][0]
@@ -141,37 +167,26 @@ for file in data_files:
             print(f"No generic name found for {drug_label['id']}")
             continue
         assert drug_name is not None, "Drug name should not be None"
-        if 'adverse_reactions_table' in drug_label:
-            html_content = drug_label['adverse_reactions_table'][0]
+        if 'adverse_reactions_table' in drug_label and 'adverse_reactions' in drug_label and 'openfda' in drug_label and 'route' in drug_label['openfda']:
+            html_content = drug_label['adverse_reactions'][0]
+            for i in range(1, len(drug_label['adverse_reactions'])):
+                html_content += drug_label['adverse_reactions'][i]
+            for i in range(0, len(drug_label['adverse_reactions_table'])):
+                html_content += drug_label['adverse_reactions_table'][i]
 
             ae_dict = parse_adverse_reactions_table_llm(html_content)
-            print(ae_dict)
+            ae_dict['drug_spl_set_id'] = drug_label['openfda']['spl_set_id'][0]
+            ae_dict['drug_route'] = drug_label['openfda']['route'][0]
+            # print(ae_dict)
 
             # add this to all the information
-            drug_info["drug_name"].append(drug_name)
-            drug_info["adverse_effects"].append(ae_dict)
+            print('added information')
+            cnt += 1
+            drug_info.append(ae_dict)
         else:
             print(f"No adverse reactions table found for {drug_name}")
             continue
 
-# turn the drug_info into a pandas dataframe
-columns = set()
-num_entries = len(drug_info['adverse_effects'])
-for i in range(num_entries):
-    for col in drug_info['adverse_effects'][i].keys():
-        columns.add(col)
-
-columns = list(columns)
-columns.insert(0, 'drug_name')
-df = pd.DataFrame(columns=columns)
-for i in range(num_entries):
-    row = [drug_info['drug_name'][i]]
-    for col in columns[1:]:
-        if col in drug_info['adverse_effects'][i]:
-            row.append(drug_info['adverse_effects'][i][col])
-        else:
-            # insert NaN
-            row.append(np.nan)
-    df.loc[i] = row
-
-df.to_csv('data/adverse_effects.csv', index=False)
+# drump the drug_info into a JSON file
+with open('data/drug_info.json', 'w') as f:
+    f.write(json.dumps(drug_info, indent=4))
