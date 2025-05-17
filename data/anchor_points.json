@@ -5,8 +5,8 @@
     },
     {
         "drug_spl_set_id": "5171d883-fe8f-482c-97ab-40b00975b64a",
-        "good": false,
-        "comment": "guessed grade 34 incorrectly for recurrence of neuromuscular blockade"
+        "good": true,
+        "comment": "some AEs not included but did not have data/conflicted"
     },
     {
         "drug_spl_set_id": "37056cab-953e-43ba-9b4c-163a739a52f7",

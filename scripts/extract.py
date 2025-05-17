@@ -15,31 +15,57 @@ import numpy as np
 client = OpenAI()
 
 instructions = """
-You are a helpful assistant that extracts the adverse effects from drug labels of FDA approved drugs.
-The drug labels are downloaded from https://open.fda.gov/apis/drug/label/download/.
-The drug labels are in JSON format and contain a field called 'adverse_reactions_table'.
-The 'adverse_reactions_table' field contains an HTML table with the adverse effects.
+You are a bioinformatician that extracts the adverse effects from drug labels of FDA-approved drugs.
 
-Your task is to extract the adverse effects from the HTML table and return them in a structured format.
-The structured format should be a dictionary, that 
-includes the following:
-- 'drug_route': the route of administration of the drug (e.g. 'oral', 'intravenous', etc.)
-- 'drug_name': the name of the drug
-- 'adverse_effects': which is a list of dictionaries, where each dictionary represents a row in the table, and should have the following:
-    - 'adverse_effect': the name of the adverse effect, all lowercase, standardized to the MedDRA dictionary for adverse effects
-    - 'percentage': the percentage of patients that experienced that adverse effect
-    - 'grade_34': the percentage of patients that experienced that adverse effect with grade 3 or 4
-    - 'placebo': the percentage of patients that experienced that adverse effect in the placebo group
-    - 'grade_34_placebo': the percentage of patients that experienced that adverse effect with grade 3 or 4 in the placebo group
-    If a value is not present in the table, you should set it to null. Do not attempt to guess the value (for example, if there is no grade 3 or 4 data, set it to null).
+Your task is to extract the adverse effects from given text and HTML tables from **Section 6 (Adverse Reactions)** of a drug product label and return them in a structured format.
 
-The percentage may be in different formats, such as '29 %', '<1 %', or '0.5 %'.
-You should also make sure to handle these different formats and convert them to a float between 0 and 100.
+You will be provided with:
+- The **drug name**,
+- The **route of administration** (e.g., oral, intravenous),
+- And a block of text containing HTML tables and descriptions.
 
-You will receive an HTML table as a string. You will also receive the adverse reactions label as a string.
+The structured output should be in **JSON format** with the following schema:
 
-Make sure to ONLY return the structured data and nothing else.
-The structured data should be in a JSON format.
+```json
+{
+  "drug_name": "string",
+  "drug_route": "string",
+  "adverse_effects": [
+    {
+      "adverse_effect": "string (standardized to MedDRA, all lowercase)",
+      "percentage": float or null,
+      "placebo": float or null
+    }
+  ]
+}
+```
+
+### Important Extraction Rules:
+
+1. **Extract adverse effects and their incidence (%) from the selected treatment arm column.**
+
+   * Also extract the corresponding value from the placebo column if available.
+
+2. **Normalize percentage values:**
+
+   * Convert strings like `(<1%)`, `(23 %)`, or `15 (15)` into numeric floats between 0 and 100.
+   * Use the number in parentheses as the percentage.
+   * If a value is `0`, return `0.0`; if value is `<1`, return a float such as `0.5`.
+
+3. **Standardize adverse effect names using the MedDRA dictionary and lowercase formatting.**
+
+4. If any value (either treatment or placebo) is missing, set it to `null`.
+
+5. If adverse effects are grouped under body systems (e.g., "Nervous system disorders"), ignore these headings for extraction purposes — they are not adverse effects themselves.
+
+6. Do not include duplicate adverse effects.
+   - If the same adverse effect appears more than once (even with different values), include only the **first occurrence** based on the order in the table or text.
+   - Discard subsequent instances of the same adverse effect.
+   - Use string matching after standardizing the name (e.g., "Dry mouth" and "dry mouth" both map to "dry mouth").
+
+7. Preserve the order the adverse effects appear in the table.
+
+Return **only** the structured JSON. Do not include any commentary or explanatory text.
 """
 
 def parse_adverse_reactions_table_llm(html_string: str) -> dict:
@@ -56,11 +82,10 @@ def parse_adverse_reactions_table_llm(html_string: str) -> dict:
                 {
                     'adverse_effect': str,
                     'percentage': float,
-                    'grade_34': float,
                     'placebo': float,
-                    'grade_34_placebo': float
                 }
-            ]
+            ],
+            'spl-set-id': str
         }
     """
     response = client.chat.completions.create(
@@ -139,7 +164,8 @@ def parse_adverse_reactions_table(html_string: str) -> dict:
 
 
 # data_files = [f"data/drug-label-00{i}-of-0013.json" for i in range(1, 14)]
-data_files = ['data/drug-label-0013-of-0013.json', 'data/drug-label-0012-of-0013.json']
+# data_files = ['data/drug-label-0013-of-0013.json', 'data/drug-label-0012-of-0013.json']
+data_files = ['data/drug-label-0013-of-0013.json']
 
 drug_info = []
 
@@ -188,5 +214,7 @@ for file in data_files:
             continue
 
 # drump the drug_info into a JSON file
+print(f"Writing {len(drug_info)} drug labels to file.")
 with open('data/drug_info.json', 'w') as f:
     f.write(json.dumps(drug_info, indent=4))
+print("Done.")
